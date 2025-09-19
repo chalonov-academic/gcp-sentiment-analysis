@@ -56,7 +56,7 @@ Implementación completa de un sistema de análisis de sentimientos usando servi
 
 ```bash
 # Configurar proyecto
-export PROJECT_ID="sentiment-analysis-demo-2024"
+export PROJECT_ID="sentiment-analysis-demo-2025"
 gcloud config set project $PROJECT_ID
 
 # Habilitar APIs necesarias
@@ -64,27 +64,31 @@ gcloud services enable cloudfunctions.googleapis.com
 gcloud services enable language.googleapis.com
 gcloud services enable bigquery.googleapis.com
 gcloud services enable storage.googleapis.com
+
+# Verificar que se habilitaron
+gcloud services list --enabled | grep -E "(language|functions|bigquery)"
 ```
 
 ### 2. Crear Infraestructura BigQuery
 
 ```sql
--- Crear dataset
-CREATE SCHEMA `sentiment-analysis-demo-2024.sentiment_data`
-OPTIONS(
-  description="Dataset para análisis de sentimientos",
-  location="US"
-);
+# Crear dataset
+bq mk --dataset --description "Dataset para análisis de sentimientos" \
+    --location=US sentiment-analysis-demo-2025:sentiment_data
 
--- Crear tabla principal
-CREATE TABLE `sentiment-analysis-demo-2024.sentiment_data.reviews` (
-  product_id STRING,
-  review_text STRING,
-  sentiment_score FLOAT64,
-  sentiment_magnitude FLOAT64,
-  sentiment_classification STRING,
-  processed_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
-);
+# Crear tabla
+bq mk --table \
+    sentiment-analysis-demo-2025:sentiment_data.reviews \
+    product_id:STRING,review_text:STRING,sentiment_score:FLOAT64,sentiment_magnitude:FLOAT64,sentiment_classification:STRING,processed_timestamp:TIMESTAMP
+
+# Listar datasets
+bq ls
+
+# Listar tablas en el dataset
+bq ls sentiment_data
+
+# Ver detalles de la tabla
+bq show sentiment_data.reviews
 ```
 
 ### 3. Desplegar Cloud Function
@@ -112,6 +116,7 @@ gcloud functions deploy analyze-sentiment \
     --memory 256MB \
     --timeout 60s \
     --region us-central1
+
 ```
 
 ## 📝 Código de la Cloud Function
@@ -119,6 +124,7 @@ gcloud functions deploy analyze-sentiment \
 **Crear archivo `main.py`:**
 
 ```python
+cat > main.py << 'EOF'
 import functions_framework
 from google.cloud import language_v1
 from google.cloud import bigquery
@@ -214,6 +220,7 @@ def analyze_sentiment(request):
     except Exception as e:
         logger.error(f"Error: {str(e)}")
         return json.dumps({'error': f'Error interno: {str(e)}'}), 500, headers
+EOF
 ```
 
 ## 🧪 Casos de Prueba
@@ -222,7 +229,7 @@ def analyze_sentiment(request):
 
 ```bash
 # URL de la función desplegada
-FUNCTION_URL="https://us-central1-tokyo-comfort-472221-b8.cloudfunctions.net/analyze-sentiment"
+FUNCTION_URL="https://us-central1-sentiment-analysis-demo-2025.cloudfunctions.net/analyze-sentiment"
 
 # Test 1: Review positiva
 curl -X POST "$FUNCTION_URL" \
@@ -238,7 +245,7 @@ curl -X POST "$FUNCTION_URL" \
 ### Usando Postman
 
 **Método:** POST  
-**URL:** `https://us-central1-tokyo-comfort-472221-b8.cloudfunctions.net/analyze-sentiment`  
+**URL:** `https://us-central1-sentiment-analysis-demo-2025.cloudfunctions.net/analyze-sentiment`  
 **Headers:** `Content-Type: application/json`
 
 **Body (JSON):**
@@ -265,20 +272,23 @@ curl -X POST "$FUNCTION_URL" \
 ### 1. Resumen General
 
 ```sql
-SELECT 
-    COUNT(*) as total_reviews,
-    ROUND(AVG(sentiment_score), 3) as avg_sentiment_global,
-    COUNTIF(sentiment_classification = "Positivo") as total_positivas,
-    COUNTIF(sentiment_classification = "Negativo") as total_negativas,
-    COUNTIF(sentiment_classification = "Neutral") as total_neutrales,
-    ROUND(COUNTIF(sentiment_classification = "Positivo") * 100.0 / COUNT(*), 1) as porcentaje_satisfaccion
-FROM `YOUR_PROJECT_ID.sentiment_data.reviews`
+# Ver todas las reviews procesadas hasta ahora
+bq query --use_legacy_sql=false \
+'SELECT 
+    product_id,
+    sentiment_classification,
+    sentiment_score,
+    LEFT(review_text, 60) as review_preview,
+    processed_timestamp
+FROM `sentiment-analysis-demo-2025.sentiment_data.reviews` 
+ORDER BY processed_timestamp DESC'
 ```
 
 ### 2. Análisis por Producto
 
 ```sql
-SELECT 
+bq query --use_legacy_sql=false \
+'SELECT 
     product_id,
     COUNT(*) as total_reviews,
     ROUND(AVG(sentiment_score), 3) as avg_sentiment,
@@ -291,20 +301,21 @@ SELECT
         WHEN AVG(sentiment_score) > -0.1 THEN "⭐⭐⭐ Regular"
         ELSE "⭐⭐ Malo"
     END as rating
-FROM `YOUR_PROJECT_ID.sentiment_data.reviews` 
+FROM `sentiment-analysis-demo-2025.sentiment_data.reviews` 
 GROUP BY product_id
-ORDER BY avg_sentiment DESC
+ORDER BY avg_sentiment DESC'
 ```
 
 ### 3. Reviews Extremas
 
 ```sql
-(SELECT 
+bq query --use_legacy_sql=false \
+'(SELECT 
     "MÁS POSITIVAS" as tipo,
     product_id,
     ROUND(sentiment_score, 3) as score,
     LEFT(review_text, 70) as review_preview
-FROM `YOUR_PROJECT_ID.sentiment_data.reviews` 
+FROM `sentiment-analysis-demo-2025.sentiment_data.reviews` 
 ORDER BY sentiment_score DESC 
 LIMIT 3)
 UNION ALL
@@ -313,10 +324,10 @@ UNION ALL
     product_id,
     ROUND(sentiment_score, 3) as score,
     LEFT(review_text, 70) as review_preview
-FROM `YOUR_PROJECT_ID.sentiment_data.reviews` 
+FROM `sentiment-analysis-demo-2025.sentiment_data.reviews` 
 ORDER BY sentiment_score ASC 
 LIMIT 3)
-ORDER BY tipo DESC, score DESC
+ORDER BY tipo DESC, score DESC'
 ```
 
 ## 📂 Datos de Prueba
@@ -324,6 +335,11 @@ ORDER BY tipo DESC, score DESC
 ### Archivo `reviews_sample.csv`
 
 ```csv
+# Ir al directorio home
+cd ~
+
+# Crear el archivo CSV
+cat > reviews_sample.csv << 'EOF'
 product_id,review_text
 PROD001,Este producto es increíble, superó todas mis expectativas. Lo recomiendo totalmente.
 PROD001,Muy mala calidad, se rompió al segundo día de uso. No lo compren.
@@ -337,112 +353,208 @@ PROD003,Cumple con lo prometido. Buen producto.
 PROD004,Increíble calidad de construcción. Vale cada peso pagado.
 PROD004,Regular, esperaba algo mejor por el precio.
 PROD004,Fantástico producto, lo volvería a comprar sin dudarlo.
+EOF
+
+# Verificar que se creó correctamente
+head -5 reviews_sample.csv
 ```
 
 ## 🐍 Scripts de Procesamiento
 
 ### Script 1: Procesamiento Individual
 
-**Archivo: `test_sentiment.py`**
+**Archivo: `test_individual.py`**
 
 ```python
+cat > test_individual.py << 'EOF'
 import requests
 import json
 
-def test_sentiment_analysis():
+def test_single_review():
     """Script para probar análisis individual de reviews"""
     
-    # URL de tu función desplegada (cambiar por la tuya)
-    url = "https://us-central1-YOUR_PROJECT_ID.cloudfunctions.net/analyze-sentiment"
+    # URL de tu función desplegada
+    url = "https://us-central1-sentiment-analysis-demo-2025.cloudfunctions.net/analyze-sentiment"
     
-    # Reviews de prueba
+    # Reviews de prueba individuales
     test_reviews = [
-        {"product_id": "TEST001", "review_text": "Este producto es excelente, me encanta mucho"},
-        {"product_id": "TEST002", "review_text": "Terrible producto, muy mala calidad"},
-        {"product_id": "TEST003", "review_text": "Producto promedio, cumple su función"}
+        {"product_id": "INDIVIDUAL_001", "review_text": "Este producto es absolutamente fantástico, lo amo"},
+        {"product_id": "INDIVIDUAL_002", "review_text": "Horrible, el peor dinero que he gastado en mi vida"},
+        {"product_id": "INDIVIDUAL_003", "review_text": "El producto está bien, cumple su función básica"},
+        {"product_id": "INDIVIDUAL_004", "review_text": "¡Increíble! Superó todas mis expectativas por completo"},
+        {"product_id": "INDIVIDUAL_005", "review_text": "Muy decepcionante, no funciona como se esperaba"}
     ]
     
-    print("🚀 INICIANDO PRUEBAS DE ANÁLISIS DE SENTIMIENTOS")
-    print("=" * 60)
+    print("🚀 INICIANDO PRUEBAS INDIVIDUALES DE ANÁLISIS DE SENTIMIENTOS")
+    print("=" * 70)
     
     for i, review in enumerate(test_reviews):
-        print(f"[{i+1}] Procesando: {review['product_id']}")
-        print(f"    Text: {review['review_text']}")
+        print(f"\n[{i+1}] Procesando: {review['product_id']}")
+        print(f"    📝 Review: {review['review_text']}")
         
         try:
             response = requests.post(url, json=review, timeout=30)
             if response.status_code == 200:
                 result = response.json()
-                emoji = "😊" if result['sentiment_classification'] == 'Positivo' else "😞" if result['sentiment_classification'] == 'Negativo' else "😐"
-                print(f"    ✅ {emoji} {result['sentiment_classification']} (Score: {result['sentiment_score']:.3f})")
+                
+                # Emoji y color según sentimiento
+                if result['sentiment_classification'] == 'Positivo':
+                    emoji = "😊"
+                    color = "🟢"
+                elif result['sentiment_classification'] == 'Negativo':
+                    emoji = "😞"
+                    color = "🔴"
+                else:
+                    emoji = "😐"
+                    color = "🟡"
+                
+                print(f"    {color} Resultado: {emoji} {result['sentiment_classification']}")
+                print(f"    📊 Score: {result['sentiment_score']:.3f}")
+                print(f"    📏 Magnitud: {result['sentiment_magnitude']:.3f}")
+                print(f"    💬 {result['message']}")
+                
             else:
-                print(f"    ❌ Error: {response.status_code}")
+                print(f"    ❌ Error HTTP: {response.status_code}")
+                print(f"    📄 Response: {response.text}")
+                
         except Exception as e:
-            print(f"    ❌ Error: {e}")
+            print(f"    ❌ Error de conexión: {e}")
         
-        print()
+        print("-" * 50)
+
+    print(f"\n🎉 ¡Pruebas individuales completadas!")
+    print(f"🔍 Verifica los resultados en BigQuery")
 
 if __name__ == "__main__":
-    test_sentiment_analysis()
+    test_single_review()
+EOF
 ```
 
 ### Script 2: Procesamiento Masivo
 
-**Archivo: `process_csv.py`**
+**Archivo: `process_all_reviews.py`**
 
 ```python
-import pandas as pd
+cat > process_all_reviews.py << 'EOF'
 import requests
+import json
 import time
 
-def process_csv_reviews(csv_file, function_url):
-    """
-    Procesa un archivo CSV completo de reviews
-    """
+def process_all_reviews():
+    url = "https://us-central1-sentiment-analysis-demo-2025.cloudfunctions.net/analyze-sentiment"
     
-    print(f"📁 Cargando reviews desde {csv_file}")
-    df = pd.read_csv(csv_file)
+    # Todas las reviews del CSV
+    reviews = [
+        {"product_id": "PROD001", "review_text": "Este producto es increíble, superó todas mis expectativas. Lo recomiendo totalmente."},
+        {"product_id": "PROD001", "review_text": "Muy mala calidad, se rompió al segundo día de uso. No lo compren."},
+        {"product_id": "PROD001", "review_text": "Producto decente, cumple su función pero nada extraordinario."},
+        {"product_id": "PROD002", "review_text": "Excelente relación calidad-precio. Muy satisfecho con la compra."},
+        {"product_id": "PROD002", "review_text": "El peor producto que he comprado en mi vida. Servicio al cliente terrible."},
+        {"product_id": "PROD002", "review_text": "Está bien, aunque tardó mucho en llegar."},
+        {"product_id": "PROD003", "review_text": "Perfecto para lo que necesitaba. Llegó rápido y bien empacado."},
+        {"product_id": "PROD003", "review_text": "No funciona como se describe en la página. Muy decepcionado."},
+        {"product_id": "PROD003", "review_text": "Cumple con lo prometido. Buen producto."},
+        {"product_id": "PROD004", "review_text": "Increíble calidad de construcción. Vale cada peso pagado."},
+        {"product_id": "PROD004", "review_text": "Regular, esperaba algo mejor por el precio."},
+        {"product_id": "PROD004", "review_text": "Fantástico producto, lo volvería a comprar sin dudarlo."}
+    ]
     
-    print(f"📊 Procesando {len(df)} reviews...")
+    results = []
+    total = len(reviews)
+    
+    print("🚀 PROCESANDO TODAS LAS REVIEWS DEL DATASET")
     print("=" * 60)
     
-    successful = 0
-    failed = 0
-    
-    for index, row in df.iterrows():
-        payload = {
-            'product_id': str(row['product_id']),
-            'review_text': str(row['review_text'])
-        }
-        
-        print(f"[{index+1:2d}/{len(df)}] {row['product_id']}: {str(row['review_text'])[:50]}...")
+    for i, review in enumerate(reviews):
+        print(f"[{i+1:2d}/{total}] {review['product_id']}: {review['review_text'][:50]}...")
         
         try:
-            response = requests.post(function_url, json=payload, timeout=30)
+            response = requests.post(url, json=review, timeout=30)
             if response.status_code == 200:
                 result = response.json()
+                results.append(result)
+                
+                # Emoji según sentimiento
                 emoji = "😊" if result['sentiment_classification'] == 'Positivo' else "😞" if result['sentiment_classification'] == 'Negativo' else "😐"
                 print(f"         ✅ {emoji} {result['sentiment_classification']} (Score: {result['sentiment_score']:.3f})")
-                successful += 1
             else:
                 print(f"         ❌ Error HTTP: {response.status_code}")
-                failed += 1
+                
         except Exception as e:
             print(f"         ❌ Error: {e}")
-            failed += 1
         
-        time.sleep(1)  # Pausa entre requests
+        # Pausa entre requests
+        time.sleep(1)
     
-    print(f"\n📊 RESUMEN:")
-    print(f"✅ Exitosas: {successful}")
-    print(f"❌ Fallidas: {failed}")
-    print(f"📈 Total procesadas: {successful}")
+    # Resumen final
+    print("\n" + "=" * 60)
+    print("📊 RESUMEN FINAL")
+    print("=" * 60)
+    
+    if results:
+        # Contar por clasificación
+        positivos = sum(1 for r in results if r['sentiment_classification'] == 'Positivo')
+        negativos = sum(1 for r in results if r['sentiment_classification'] == 'Negativo')
+        neutrales = sum(1 for r in results if r['sentiment_classification'] == 'Neutral')
+        
+        print(f"✅ Reviews procesadas: {len(results)}/{total}")
+        print(f"😊 Positivas: {positivos} ({positivos/len(results)*100:.1f}%)")
+        print(f"😞 Negativas: {negativos} ({negativos/len(results)*100:.1f}%)")
+        print(f"😐 Neutrales: {neutrales} ({neutrales/len(results)*100:.1f}%)")
+        
+        # Sentimiento promedio
+        avg_score = sum(r['sentiment_score'] for r in results) / len(results)
+        print(f"📊 Sentimiento promedio: {avg_score:.3f}")
+        
+        # Extremos
+        max_score = max(results, key=lambda x: x['sentiment_score'])
+        min_score = min(results, key=lambda x: x['sentiment_score'])
+        
+        print(f"\n🏆 Más positiva: {max_score['product_id']} (Score: {max_score['sentiment_score']:.3f})")
+        print(f"💔 Más negativa: {min_score['product_id']} (Score: {min_score['sentiment_score']:.3f})")
+    
+    print(f"\n🎉 ¡Completado! Verifica en BigQuery: https://console.cloud.google.com/bigquery")
+    return results
 
 if __name__ == "__main__":
-    # Cambiar por tu URL de función
-    FUNCTION_URL = "https://us-central1-YOUR_PROJECT_ID.cloudfunctions.net/analyze-sentiment"
-    process_csv_reviews('reviews_sample.csv', FUNCTION_URL)
+    process_all_reviews()
+EOF
 ```
+
+## 📊 Consultas de Análisis (Desde Cloud Shell)
+### Resumen general
+```bash
+bq query --use_legacy_sql=false \
+'SELECT 
+    COUNT(*) as total_reviews,
+    ROUND(AVG(sentiment_score), 3) as avg_sentiment_global,
+    COUNTIF(sentiment_classification = "Positivo") as total_positivas,
+    COUNTIF(sentiment_classification = "Negativo") as total_negativas,
+    COUNTIF(sentiment_classification = "Neutral") as total_neutrales,
+    ROUND(COUNTIF(sentiment_classification = "Positivo") * 100.0 / COUNT(*), 1) as porcentaje_satisfaccion
+FROM `sentiment-analysis-demo-2025.sentiment_data.reviews`'
+```
+### Análisis por Producto
+```bash
+bq query --use_legacy_sql=false \
+'SELECT 
+    product_id,
+    COUNT(*) as total_reviews,
+    ROUND(AVG(sentiment_score), 3) as avg_sentiment,
+    COUNTIF(sentiment_classification = "Positivo") as positivas,
+    COUNTIF(sentiment_classification = "Negativo") as negativas,
+    ROUND(COUNTIF(sentiment_classification = "Positivo") * 100.0 / COUNT(*), 1) as porcentaje_positivo,
+    CASE 
+        WHEN AVG(sentiment_score) > 0.3 THEN "⭐⭐⭐⭐⭐ Excelente"
+        WHEN AVG(sentiment_score) > 0.1 THEN "⭐⭐⭐⭐ Bueno" 
+        WHEN AVG(sentiment_score) > -0.1 THEN "⭐⭐⭐ Regular"
+        ELSE "⭐⭐ Malo"
+    END as rating
+FROM `sentiment-analysis-demo-2025.sentiment_data.reviews` 
+GROUP BY product_id
+ORDER BY avg_sentiment DESC'
+```
+# 🏁 Hasta aqui se puede realizar el ejercicio 🏁
 
 ## 🔧 Comandos de Verificación
 
