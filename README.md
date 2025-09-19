@@ -555,6 +555,23 @@ GROUP BY product_id
 ORDER BY avg_sentiment DESC'
 ```
 # 🏁 Hasta aqui se puede realizar el ejercicio 🏁
+## 🗑️ Eliminar TODO
+```bash
+# Ver tus proyectos
+gcloud projects list
+
+# Eliminar el proyecto completo (CUIDADO: Irreversible)
+gcloud projects delete sentiment-analysis-demo-2025
+
+# Confirmar cuando te pregunte escribiendo el Project ID
+
+# Verificar que el proyecto ya no existe
+gcloud projects describe sentiment-analysis-demo-2025
+# Debe dar error: "Project not found"
+
+# Ver tus proyectos actuales
+gcloud projects list
+```
 
 ## 🔧 Comandos de Verificación
 
